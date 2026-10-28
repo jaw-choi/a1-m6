@@ -1,0 +1,59 @@
+# A1-M6 실습용 MySQL — 내 네임스페이스 안에서만 쓰는 DB
+# 적용: kubectl apply -f k8s/mysql.yaml   (네임스페이스는 접속 파일의 기본값 = 내 devNN)
+# 주의: 수업용이라 emptyDir 사용 → 파드가 지워지면 데이터도 사라짐 (PVC 쿼터 0)
+#       운영이라면 PVC(영구 스토리지) 또는 관리형 DB(RDS 등)를 씁니다.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: a1-mysql
+type: Opaque
+stringData:
+  MYSQL_ROOT_PASSWORD: "root-pass-change-me"
+  MYSQL_DATABASE: "inspect_db"
+  MYSQL_USER: "inspect_user"
+  MYSQL_PASSWORD: "inspect-pass-1234"     # 영문·숫자·하이픈만 (URL에 그대로 들어가므로)
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: a1-mysql
+  labels: { app: a1-mysql }
+spec:
+  replicas: 1
+  strategy: { type: Recreate }            # DB는 동시에 2개 뜨면 안 되므로 교체형
+  selector:
+    matchLabels: { app: a1-mysql }
+  template:
+    metadata:
+      labels: { app: a1-mysql }
+    spec:
+      containers:
+        - name: mysql
+          image: mysql:8.4
+          args: ["--performance-schema=OFF", "--innodb-buffer-pool-size=64M"]
+          envFrom:
+            - secretRef: { name: a1-mysql }
+          ports:
+            - containerPort: 3306
+          readinessProbe:
+            tcpSocket: { port: 3306 }
+            initialDelaySeconds: 15
+            periodSeconds: 5
+          resources:
+            requests: { cpu: 100m, memory: 256Mi }
+            limits:   { cpu: 300m, memory: 512Mi }
+          volumeMounts:
+            - { name: data, mountPath: /var/lib/mysql }
+      volumes:
+        - name: data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: a1-mysql                           # 앱은 이 이름(a1-mysql:3306)으로 접속
+spec:
+  selector: { app: a1-mysql }              # type 없음 = ClusterIP → 클러스터 안에서만 보임
+  ports:
+    - port: 3306
+      targetPort: 3306
